@@ -64,16 +64,19 @@ func (e *Enforcer) Query(query, value string) (string, error) {
 
 	var present bool
 	// Walk visits every node; MatchersExpr is the only one holding a stream
-	// selector, and AppendMatchers mutates it in place.
-	expr.Walk(func(node syntax.Expr) {
+	// selector, and AppendMatchers mutates it in place. The bool asks whether
+	// to descend into the node's children, and every selector in the tree has
+	// to be rewritten, so it is always true.
+	expr.Walk(func(node syntax.Expr) bool {
 		selector, ok := node.(*syntax.MatchersExpr)
 		if !ok {
-			return
+			return true
 		}
 		kept, found := strip(selector.Mts, e.label)
 		present = present || found
 		selector.Mts = kept
 		selector.AppendMatchers([]*labels.Matcher{matcher})
+		return true
 	})
 
 	if present && e.errorOnReplace {
