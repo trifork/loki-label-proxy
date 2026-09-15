@@ -311,19 +311,33 @@ func TestEmptyMatchIsTreatedAsAbsent(t *testing.T) {
 	}
 }
 
-// An empty query on a genuine query endpoint is still an error, but it should
-// say so plainly rather than leaking a parser message about "$end".
-func TestEmptyQueryOnQueryEndpointReportsMissingParameter(t *testing.T) {
-	h, up := newTestHandler(t)
+// Loki requires a query on these endpoints, but enforcing that here would make
+// the proxy stricter than the thing it fronts, and Grafana issues speculative
+// calls with no query yet. Inject the selector and let Loki answer for its own
+// contract -- the request is still scoped, which is all this proxy owes.
+func TestEmptyQueryOnQueryEndpointsGetsSelectorInjected(t *testing.T) {
+	for _, path := range []string{
+		"/loki/api/v1/query_range",
+		"/loki/api/v1/query",
+		"/loki/api/v1/index/stats",
+		"/loki/api/v1/index/volume",
+		"/loki/api/v1/index/volume_range",
+		"/loki/api/v1/patterns",
+		"/loki/api/v1/detected_labels",
+		"/loki/api/v1/detected_fields",
+	} {
+		for _, target := range []string{path, path + "?query="} {
+			t.Run(target, func(t *testing.T) {
+				h, up := newTestHandler(t)
 
-	rec := do(t, h, http.MethodGet, "/loki/api/v1/query_range?query=", "", value)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", rec.Code)
-	}
-	if strings.Contains(rec.Body.String(), "$end") {
-		t.Errorf("error leaks a parser message: %s", rec.Body.String())
-	}
-	if up.gotPath != "" {
-		t.Errorf("request reached upstream at %s, want no forwarding", up.gotPath)
+				rec := do(t, h, http.MethodGet, target, "", value)
+				if rec.Code != http.StatusOK {
+					t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
+				}
+				if got, want := up.gotQuery.Get("query"), `{tenant_namespace="team-a-prod"}`; got != want {
+					t.Errorf("forwarded query = %q, want %s", got, want)
+				}
+			})
+		}
 	}
 }

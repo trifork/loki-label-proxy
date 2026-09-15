@@ -83,13 +83,13 @@ func New(cfg Config) (*Handler, error) {
 		"/loki/api/v1/detected_labels",
 		"/loki/api/v1/detected_fields",
 	} {
-		h.mux.HandleFunc(path, h.handleQuery("query", true))
+		h.mux.HandleFunc(path, h.handleQuery("query"))
 	}
 
 	// Metadata endpoints: the query parameter is optional. When absent we
 	// inject a bare selector, so an unscoped call cannot enumerate everything.
-	h.mux.HandleFunc("/loki/api/v1/labels", h.handleQuery("query", false))
-	h.mux.HandleFunc("/loki/api/v1/label", h.handleQuery("query", false))
+	h.mux.HandleFunc("/loki/api/v1/labels", h.handleQuery("query"))
+	h.mux.HandleFunc("/loki/api/v1/label", h.handleQuery("query"))
 	h.mux.HandleFunc("/loki/api/v1/label/", h.handleLabelValues())
 
 	// The series endpoint takes bare selectors, possibly several.
@@ -148,9 +148,15 @@ func (h *Handler) value(w http.ResponseWriter, r *http.Request) (string, bool) {
 }
 
 // handleQuery enforces a full LogQL expression held in the named parameter.
-// When required is false and the parameter is absent, a bare selector is
-// injected instead.
-func (h *Handler) handleQuery(param string, required bool) http.HandlerFunc {
+// An absent or empty parameter yields the bare enforced selector.
+//
+// Note this proxy does not police whether a query was required. Loki's own API
+// requires one on most of these endpoints, but validating that here only makes
+// the proxy stricter than the thing it fronts -- and Grafana issues plenty of
+// speculative calls with no query yet. Injecting the selector keeps the request
+// enforced, which is the only thing this process is responsible for, and lets
+// Loki answer for its own contract.
+func (h *Handler) handleQuery(param string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		value, ok := h.value(w, r)
 		if !ok {
@@ -158,9 +164,6 @@ func (h *Handler) handleQuery(param string, required bool) http.HandlerFunc {
 		}
 		h.rewrite(w, r, param, func(in string, present bool) (string, error) {
 			if !present {
-				if required {
-					return "", fmt.Errorf("missing %q parameter", param)
-				}
 				return h.cfg.Enforcer.Selector(value)
 			}
 			return h.cfg.Enforcer.Query(in, value)
@@ -214,7 +217,7 @@ func (h *Handler) handleSeries() http.HandlerFunc {
 // entitled to exactly one, and going upstream for it would return every
 // tenant's.
 func (h *Handler) handleLabelValues() http.HandlerFunc {
-	inner := h.handleQuery("query", false)
+	inner := h.handleQuery("query")
 	return func(w http.ResponseWriter, r *http.Request) {
 		value, ok := h.value(w, r)
 		if !ok {
