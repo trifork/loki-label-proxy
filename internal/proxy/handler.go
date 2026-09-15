@@ -186,11 +186,23 @@ func (h *Handler) handleSeries() http.HandlerFunc {
 			}
 			out := make([]string, 0, len(in))
 			for _, sel := range in {
+				// Same reasoning as above: an empty match[] is a request for
+				// everything, not a malformed selector.
+				if strings.TrimSpace(sel) == "" {
+					continue
+				}
 				rewritten, err := h.cfg.Enforcer.Matchers(sel, value)
 				if err != nil {
 					return nil, err
 				}
 				out = append(out, rewritten)
+			}
+			if len(out) == 0 {
+				sel, err := h.cfg.Enforcer.Selector(value)
+				if err != nil {
+					return nil, err
+				}
+				return []string{sel}, nil
 			}
 			return out, nil
 		})
@@ -233,13 +245,15 @@ func (h *Handler) handlePassthrough() http.HandlerFunc {
 // rewrite applies fn to a single-valued parameter.
 func (h *Handler) rewrite(w http.ResponseWriter, r *http.Request, param string, fn func(string, bool) (string, error)) {
 	h.rewriteAll(w, r, param, func(in []string) ([]string, error) {
-		var (
-			cur     string
-			present = len(in) > 0
-		)
-		if present {
-			cur = in[0]
+		var cur string
+		if len(in) > 0 {
+			cur = strings.TrimSpace(in[0])
 		}
+		// Present-but-empty counts as absent. Grafana sends a bare "query="
+		// on its metadata calls, and handing that to the parser yields
+		// "unexpected $end" rather than the unscoped-request handling the
+		// caller actually meant.
+		present := cur != ""
 		out, err := fn(cur, present)
 		if err != nil {
 			return nil, err

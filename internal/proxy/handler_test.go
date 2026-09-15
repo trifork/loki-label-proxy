@@ -274,3 +274,56 @@ func do(t *testing.T, h *Handler, method, target, body, headerValue string) *htt
 	h.ServeHTTP(rec, r)
 	return rec
 }
+
+// Grafana sends a bare "query=" on its metadata calls. Treating present-but-empty
+// as a query to parse yields "unexpected $end", which surfaces in Grafana as an
+// error popup even though the data queries themselves work.
+func TestEmptyQueryParamIsTreatedAsAbsent(t *testing.T) {
+	for _, target := range []string{
+		"/loki/api/v1/labels?query=",
+		"/loki/api/v1/labels?query=&start=1&end=2",
+		"/loki/api/v1/labels?query=%20",
+		"/loki/api/v1/label/app/values?query=",
+	} {
+		t.Run(target, func(t *testing.T) {
+			h, up := newTestHandler(t)
+
+			rec := do(t, h, http.MethodGet, target, "", value)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
+			}
+			if got, want := up.gotQuery.Get("query"), `{tenant_namespace="team-a-prod"}`; got != want {
+				t.Errorf("forwarded query = %q, want the injected selector %s", got, want)
+			}
+		})
+	}
+}
+
+func TestEmptyMatchIsTreatedAsAbsent(t *testing.T) {
+	h, up := newTestHandler(t)
+
+	rec := do(t, h, http.MethodGet, "/loki/api/v1/series?match[]=", "", value)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
+	}
+	if got, want := up.gotQuery.Get("match[]"), `{tenant_namespace="team-a-prod"}`; got != want {
+		t.Errorf("forwarded match[] = %q, want %s", got, want)
+	}
+}
+
+// An empty query on a genuine query endpoint is still an error, but it should
+// say so plainly rather than leaking a parser message about "$end".
+func TestEmptyQueryOnQueryEndpointReportsMissingParameter(t *testing.T) {
+	h, up := newTestHandler(t)
+
+	rec := do(t, h, http.MethodGet, "/loki/api/v1/query_range?query=", "", value)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "$end") {
+		t.Errorf("error leaks a parser message: %s", rec.Body.String())
+	}
+	if up.gotPath != "" {
+		t.Errorf("request reached upstream at %s, want no forwarding", up.gotPath)
+	}
+}
