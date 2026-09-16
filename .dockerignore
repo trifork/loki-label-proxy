@@ -1,0 +1,12 @@
+# The build needs go.mod, go.sum, the Go source and LICENSE. Everything else
+# only invalidates the COPY . . layer, and with it the compile of 120 indirect
+# dependencies -- so a README edit would otherwise cost a full rebuild.
+#
+# .git matters most since the release workflow clones full history to read the
+# tag message.
+.git
+.github
+bin
+Dockerfile
+Makefile
+README.md
