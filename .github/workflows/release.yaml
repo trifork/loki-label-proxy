@@ -13,7 +13,11 @@ jobs:
   image:
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 so the annotated tag object, and therefore its message,
+      # is present locally. A shallow checkout gives the commit but not the tag.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: docker/setup-buildx-action@v3
 
@@ -41,11 +45,33 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # The annotated tag message is where the release is actually described,
+      # so it leads the body. Write the tag's own prose, then the image, and
+      # let the action append its generated pull-request list below both.
+      #
+      # Tag messages are expected to be prose: git treats the first line as the
+      # subject, so a tag whose message is only its version number contributes
+      # nothing but a repeated heading here.
+      - id: notes
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
+        run: |
+          notes="$RUNNER_TEMP/notes.md"
+          # Lightweight tags have no message of their own; %(contents) would
+          # yield the commit message, which is not a release note.
+          if [ "$(git cat-file -t "$GITHUB_REF_NAME")" = tag ]; then
+            git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > "$notes"
+            echo >> "$notes"
+          else
+            : > "$notes"
+          fi
+          echo "Container image: \`$IMAGE\`" >> "$notes"
+          echo "path=$notes" >> "$GITHUB_OUTPUT"
+
       # A pushed tag is not a release; GitHub never promotes one to the other.
       # v0.1.0 through v0.1.2 shipped images with an empty releases page
       # because nothing here ever asked for one.
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          body: |
-            Container image: `ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}`
+          body_path: ${{ steps.notes.outputs.path }}
